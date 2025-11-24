@@ -1,0 +1,164 @@
+# ============================================================================
+# AI-Powered Security Camera Motion Analysis
+# ============================================================================
+# This Home Assistant automation monitors Ring (or any compatible) security
+# cameras for motion, captures snapshots from multiple angles, and uses
+# GPT-4o-mini vision analysis to provide intelligent descriptions of what
+# triggered the motion detection.
+#
+# CONFIGURATION REQUIRED BEFORE USE:
+# ----------------------------------
+# 1. Motion Sensors (lines ~7, ~11):
+#    - Replace with your camera motion sensor entities
+#    - Example: binary_sensor.front_door_motion
+#    - Find in Developer Tools → States
+#
+# 2. Camera Entities (lines ~22, ~28):
+#    - Replace with your camera snapshot entities
+#    - Example: camera.front_door_snapshot
+#    - Must support the camera.snapshot service
+#
+# 3. Snapshot File Paths (lines ~21, ~27):
+#    - Update paths if needed (default: /config/www/tmp/)
+#    - Ensure directory exists and is writable
+#    - Files: frontdoorcamera.jpg, sideyardcamera.jpg
+#
+# 4. LLM Vision Provider (line ~53):
+#    - Replace "YOUR_LLM_PROVIDER_ID" with your LLM Vision provider ID
+#    - Find in Settings → Integrations → LLM Vision
+#    - This automation uses GPT-4o-mini but you could possibly use others
+#
+# 5. Notification Service (line ~59):
+#    - Replace "notify.mobile_app_your_phone" with your notify service
+#    - Find in Developer Tools → Services
+#    - Example: notify.mobile_app_iphone
+#
+# 6. Home Assistant URL (lines ~65, ~67, ~74):
+#    - Replace "YOUR_HA_IP_OR_DOMAIN" with your HA URL
+#    - Use local IP (192.168.x.x) or domain (home.example.com)
+#    - Must be accessible from your mobile device
+#
+# 7. Voice Device ID (lines ~81, ~87):
+#    - Replace "YOUR_VOICE_DEVICE_ID" with your satellite device ID
+#    - Find in Settings → Devices & Services → [Device] → Device Info
+#    - Optional: Remove entire voice announcement section if not needed
+#
+# REQUIREMENTS:
+# -------------
+# - LLM Vision integration (HACS)
+# - GPT-4o-mini API access (or compatible vision model)
+# - Camera entities that support snapshot service
+# - Motion detection sensors
+# - Mobile app for notifications
+#
+# CUSTOMIZATION OPTIONS:
+# ----------------------
+# - Snapshot delay: Currently 2 seconds (line ~17)
+# - Voice announcement hours: Currently 8am-10pm (line ~78)
+# - Max tokens for AI response: Currently 150 (line ~41)
+# - Temperature (creativity): Currently 0.2 (line ~42)
+# - Target image width: Currently 1280px (line ~40)
+# - Voice volume: Currently 0.7/70% (line ~83)
+#
+# ============================================================================
+
+alias: Camera - Motion at Front Door Notification
+description: ""
+triggers:
+  - trigger: state
+    entity_id:
+      - binary_sensor.front_door_motion
+    to: "on"
+  - trigger: state
+    entity_id:
+      - binary_sensor.side_yard_motion
+    to: "on"
+conditions: []
+actions:
+  - delay:
+      hours: 0
+      minutes: 0
+      seconds: 2
+      milliseconds: 0
+  - action: camera.snapshot
+    metadata: {}
+    data:
+      filename: /config/www/tmp/frontdoorcamera.jpg
+    target:
+      entity_id: camera.front_door_snapshot
+  - action: camera.snapshot
+    metadata: {}
+    data:
+      filename: /config/www/tmp/sideyardcamera.jpg
+    target:
+      entity_id: camera.side_yard_snapshot
+  - action: llmvision.image_analyzer
+    metadata: {}
+    data:
+      remember: false
+      use_memory: false
+      include_filename: false
+      target_width: 1280
+      max_tokens: 150
+      temperature: 0.2
+      generate_title: false
+      expose_images: false
+      message: >-
+        You're the friendly AI security guard for this home! Motion was detected
+        around {{ now().strftime('%I:%M %p') }}. Look at both camera views and
+        give me one unified description of what's happening around the property.
+        Describe any people (what they look like, clothing, activity), vehicles
+        (type, purpose like delivery or just passing by), animals (what kind
+        and what they're doing), or packages you spot. If someone looks
+        suspicious (checking doors/windows, lingering, looking around
+        nervously), mention it. If it's just a quiet scene with no obvious
+        motion trigger, say that too. Treat this as one connected area rather
+        than separate views. Keep it casual and conversational but informative.
+        Around 250 characters max.
+      provider: YOUR_LLM_PROVIDER_ID
+      image_entity:
+        - camera.front_door_snapshot
+        - camera.side_yard_snapshot
+    response_variable: door_analysis
+  - variables:
+      door_alert_message: |
+        {% if door_analysis.response_text is defined %}
+          Motion detected: {{ door_analysis.response_text }}
+        {% else %}
+          Motion detected but analysis failed.
+        {% endif %}
+  - action: notify.mobile_app_your_phone
+    metadata: {}
+    data:
+      title: Motion Detection
+      message: "{{ door_alert_message }}"
+      data:
+        image: http://YOUR_HA_IP_OR_DOMAIN:8123/local/tmp/frontdoorcamera.jpg
+        attachment:
+          - url: http://YOUR_HA_IP_OR_DOMAIN:8123/local/tmp/frontdoorcamera.jpg
+          - url: http://YOUR_HA_IP_OR_DOMAIN:8123/local/tmp/sideyardcamera.jpg
+  - action: persistent_notification.create
+    metadata: {}
+    data:
+      title: Motion Detection
+      message: >-
+        {{ door_alert_message }}. [Front Door
+        Image](/local/tmp/frontdoorcamera.jpg) | [Side Yard
+        Image](/local/tmp/sideyardcamera.jpg)
+  - if:
+      - condition: time
+        after: "08:00:00"
+        before: "22:00:00"
+    then:
+      - action: media_player.volume_set
+        target:
+          device_id: YOUR_VOICE_DEVICE_ID
+        data:
+          volume_level: 0.7
+      - action: assist_satellite.announce
+        data:
+          preannounce: true
+          message: "{{ door_alert_message }}"
+        target:
+          device_id: YOUR_VOICE_DEVICE_ID
+mode: single
